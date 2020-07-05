@@ -53,7 +53,7 @@
 #define USBD_VID                        0x0483
 #define USBD_PID                        0xA2CA
 #define USBD_LANGID_STRING              0x409
-#define USBD_MANUFACTURER_STRING        "SoloKeys"
+#define USBD_MANUFACTURER_STRING        "Reptilians"
 #define USBD_PRODUCT_FS_STRING          SOLO_PRODUCT_NAME
 #define USBD_SERIAL_NUM                 "0123456789ABCDEF"
 

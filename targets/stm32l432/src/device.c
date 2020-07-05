@@ -14,6 +14,7 @@
 #include "usbd_hid.h"
 
 #include APP_CONFIG
+#include "uECC.h"
 #include "flash.h"
 #include "rng.h"
 #include "led.h"
@@ -324,10 +325,12 @@ void device_init()
     }
 
     usbhid_init();
-    ctaphid_init();
-    ctap_init();
+    // ctaphid_init();
+    // ctap_init();
 
-    device_migrate();
+    uECC_set_rng((uECC_RNG_Function) ctap_generate_rng);
+
+    // device_migrate();
 
 #if BOOT_TO_DFU
     flash_option_bytes_init(1);
@@ -374,13 +377,11 @@ void usbhid_init(void)
 
 
 
-int usbhid_recv(uint8_t * msg)
+uint8_t usbhid_recv(uint8_t * msg)
 {
     if (fifo_hidmsg_size())
     {
         fifo_hidmsg_take(msg);
-        printf1(TAG_DUMP2,">> ");
-        dump_hex1(TAG_DUMP2,msg, HID_PACKET_SIZE);
         return HID_PACKET_SIZE;
     }
     return 0;

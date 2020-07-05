@@ -58,12 +58,12 @@ int main()
             TAG_STOR |
             // TAG_CP |
             // TAG_CTAP|
-           // TAG_HID|
+            TAG_HID|
             /*TAG_U2F|*/
             // TAG_PARSE |
-           // TAG_TIME|
-           // TAG_DUMP|
-           // TAG_DUMP2|
+            TAG_TIME|
+            TAG_DUMP|
+            TAG_DUMP2|
             TAG_BOOT|
             TAG_EXT|
             TAG_GREEN|
