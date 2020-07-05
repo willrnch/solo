@@ -35,40 +35,30 @@
 
 #define RES_KEY_CREATED 0x1
 #define RES_DUMP_KEYS 0x2
+#define RES_SIGN 0x3
 #define RES_DONE 0xFF
-
-static void eth_addr_to_str(const uint8_t *dst, const uint8_t *addr) {
-  sprintf(
-      dst,
-      "0x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-      addr[0],
-      addr[1],
-      addr[2],
-      addr[3],
-      addr[4],
-      addr[5],
-      addr[6],
-      addr[7],
-      addr[8],
-      addr[9],
-      addr[10],
-      addr[11],
-      addr[12],
-      addr[13],
-      addr[14],
-      addr[15],
-      addr[16],
-      addr[17],
-      addr[18],
-      addr[19]
-  );
-}
 
 static void dumpbytes(const uint8_t *buf, size_t len)
 {
-  while (len--) {
-    printf1(TAG_DUMP2, "%02x", *buf++);
+  uint8_t *str = malloc(len * 2);
+  if (buf == NULL) {
+    printf1(TAG_DUMP2, "MALLOC ERROR\n");
+  } else {
+    size_t i = 0;
+    while (i < len) {
+      sprintf(str + (i * 2), "%02x", buf[i]);
+      ++i;
+    }
+    printf1(TAG_DUMP2, "0x%*s", len * 2, str);
+    free(str);
   }
+}
+
+static int check_index(uint8_t index) {
+  if (index >= KEY_PER_PAGE) {
+    return 1;
+  }
+  return 0;
 }
 
 void public_key_to_eth_address(uint8_t *key, uint8_t *address) {
@@ -80,12 +70,19 @@ void public_key_to_eth_address(uint8_t *key, uint8_t *address) {
   memmove(address, hash + 12, ETH_ADDR_SIZE);
 }
 
+uint8_t * get_private_key(uint8_t index) {
+  uint8_t * privkey = ((uint8_t *) flash_addr(STATE1_PAGE)) + (index * PRIVATE_KEY_SIZE);
+  return privkey;
+}
+
 int write_private_key(uint8_t index, uint8_t * key) {
   uint8_t page_cpy[FLASH_PAGE_SIZE];
   uint8_t * page_ptr = (uint8_t *) flash_addr(STATE1_PAGE);
 
+  printf1(TAG_DUMP2, "write_private_key %d %p %p\n", index, page_cpy, page_cpy + (index * PRIVATE_KEY_SIZE));
+
   memcpy(page_cpy, page_ptr, FLASH_PAGE_SIZE);
-  memcpy(page_cpy + (index * 32), key, 32);
+  memcpy(page_cpy + (index * PRIVATE_KEY_SIZE), key, PRIVATE_KEY_SIZE);
 
   flash_erase_page(STATE1_PAGE);
   flash_write(
@@ -127,17 +124,21 @@ int is_private_key_null(uint8_t *addr) {
   return 1;
 }
 
-int key_to_eth_addr(uint8_t index, uint8_t *addr) {
+void private_key_to_eth_addr(uint8_t *privkey, uint8_t *addr) {
   uint8_t pubkey[PUBLIC_KEY_SIZE];
   const struct uECC_Curve_t * curve = uECC_secp256k1();
-  uint8_t * privkey = ((uint8_t *) flash_addr(STATE1_PAGE)) + (index * PRIVATE_KEY_SIZE);
+
+  uECC_compute_public_key(privkey, pubkey, curve);
+  public_key_to_eth_address(pubkey, addr);
+}
+
+int key_to_eth_addr(uint8_t index, uint8_t *addr) {
+  uint8_t * privkey = get_private_key(index);
 
   if (is_private_key_null(privkey)) {
     return -1;
   }
-
-  uECC_compute_public_key(privkey, pubkey, curve);
-  public_key_to_eth_address(pubkey, addr);
+  private_key_to_eth_addr(privkey, addr);
   return 0;
 }
 
@@ -162,13 +163,71 @@ void cmd_reset(uint8_t * hid_msg) {
   );
 }
 
+int sign(uint8_t *privkey, uint8_t *buf, uint8_t length, uint8_t *sig) {
+  const struct uECC_Curve_t * curve = uECC_secp256k1();
+  if (!uECC_sign(privkey, buf, length, sig, curve)) {
+    return -1;
+  }
+  return 0;
+}
+
+void cmd_sign(uint8_t * hid_msg) {
+  uint8_t index = hid_msg[1];
+  if (check_index(index)) {
+    return;
+  }
+
+  uint8_t signature[64];
+  uint8_t *mess = hid_msg + 2;
+  uint8_t mess_len = 32;
+
+  uint8_t *private_key = get_private_key(index);
+
+  if (is_private_key_null(private_key)) {
+    return;
+  }
+
+  uint8_t addr[ETH_ADDR_SIZE];
+  private_key_to_eth_addr(private_key, addr);
+
+  printf1(TAG_DUMP2, "addr =\n");
+  dumpbytes(addr, ETH_ADDR_SIZE);
+  printf1(TAG_DUMP2, "\n");
+
+  if (sign(private_key, mess, mess_len, signature) == 0) {
+    uint8_t res[HID_PACKET_SIZE];
+
+    printf1(TAG_DUMP2, "signature: \n");
+    dumpbytes(signature, 64);
+    printf1(TAG_DUMP2, "\n");
+
+    res[0] = RES_SIGN;
+    memcpy(res + 1, signature, 32);
+    usbhid_send(res);
+
+    memcpy(res + 1, signature + 32, 32);
+    usbhid_send(res);
+  }
+}
+
+void cmd_delete_key(uint8_t * hid_msg) {
+  uint8_t index = hid_msg[1];
+  if (check_index(index)) {
+    return;
+  }
+
+  uint8_t privkey[PRIVATE_KEY_SIZE];
+  memset(privkey, 0, PRIVATE_KEY_SIZE);
+  write_private_key(index, privkey);
+}
+
 void cmd_create_key(uint8_t * hid_msg) {
   printf1(TAG_DUMP2, "%s\n", __func__);
 
   uint8_t index = hid_msg[1];
   uint8_t eth_addr[ETH_ADDR_SIZE];
 
-  if (index >= KEY_PER_PAGE) {
+  if (check_index(index)) {
     return;
   }
 
@@ -194,16 +253,12 @@ void cmd_dump_keys(uint8_t * hid_msg) {
   int i;
   int j = 0;
   uint8_t eth_addr[ETH_ADDR_SIZE];
-  uint8_t eth_addr_str[ETH_ADDR_SIZE * 2 + 3];
 
-  memset(res, 0, HID_PACKET_SIZE);
+  memset(res, 0xFF, HID_PACKET_SIZE);
   res[0] = RES_DUMP_KEYS;
 
   for (i = 0; i < KEY_PER_PAGE; ++i) {
     if (key_to_eth_addr(i, eth_addr) == 0) {
-      eth_addr_to_str(eth_addr_str, eth_addr);
-      printf1(TAG_DUMP2, "%d: %s\n", i, eth_addr_str);
-
       res[1 + (j * key_slot_size)] = i;
       memcpy((res + 1) + (j * key_slot_size) + 1, eth_addr, ETH_ADDR_SIZE);
 
@@ -211,7 +266,7 @@ void cmd_dump_keys(uint8_t * hid_msg) {
 
       if (j >= key_per_msg) {
         usbhid_send(res);
-        memset(res, 0, HID_PACKET_SIZE);
+        memset(res, 0xFF, HID_PACKET_SIZE);
         res[0] = RES_DUMP_KEYS;
         j = 0;
       }
@@ -231,6 +286,8 @@ struct {
   { 0x1, &cmd_reset },
   { 0x2, &cmd_create_key },
   { 0x3, &cmd_dump_keys },
+  { 0x4, &cmd_delete_key },
+  { 0x5, &cmd_sign },
   { 0x0, NULL },
 };
 
@@ -279,14 +336,12 @@ int main(int argc, char *argv[])
     uint8_t r = usbhid_recv(hidmsg);
 
     if (r > 0) {
-      printf1(TAG_DUMP2, ">> ");
-      dump_hex1(TAG_DUMP2, hidmsg, sizeof(hidmsg));
-      printf1(TAG_DUMP2, "\n");
+      // printf1(TAG_DUMP2, ">> ");
+      // dump_hex1(TAG_DUMP2, hidmsg, sizeof(hidmsg));
+      // printf1(TAG_DUMP2, "\n");
 
       for (i = 0; commands[i].handler != NULL; ++i) {
         if (hidmsg[0] == commands[i].op_code) {
-          printf1(TAG_DUMP2, "%d OK\n", i);
-
           commands[i].handler(hidmsg);
 
           uint8_t res[HID_PACKET_SIZE];
@@ -296,8 +351,6 @@ int main(int argc, char *argv[])
 
           break;
         }
-
-        printf1(TAG_DUMP2, "%d KO\n", i);
       }
 
       memset(hidmsg, 0, sizeof(hidmsg));
