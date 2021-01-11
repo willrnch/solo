@@ -11,9 +11,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-#include "sha3.h"
 #include "uECC.h"
-#include "cbor.h"
 #include "flash.h"
 #include "device.h"
 #include "memory_layout.h"
@@ -27,9 +25,9 @@
 #if !defined(TEST)
 
 
+#define COMPRESSED_PUBLIC_KEY_SIZE 33
 #define PUBLIC_KEY_SIZE 64
 #define PRIVATE_KEY_SIZE 32
-#define ETH_ADDR_SIZE 20
 
 #define KEY_PER_PAGE (FLASH_PAGE_SIZE / PRIVATE_KEY_SIZE)
 
@@ -61,15 +59,6 @@ static int check_index(uint8_t index) {
   return 0;
 }
 
-void public_key_to_eth_address(uint8_t *key, uint8_t *address) {
-  sha3_context c;
-  sha3_Init256(&c);
-  sha3_SetFlags(&c, SHA3_FLAGS_KECCAK);
-  sha3_Update(&c, key, PUBLIC_KEY_SIZE);
-  const uint8_t *hash = sha3_Finalize(&c);
-  memmove(address, hash + 12, ETH_ADDR_SIZE);
-}
-
 uint8_t * get_private_key(uint8_t index) {
   uint8_t * privkey = ((uint8_t *) flash_addr(STATE1_PAGE)) + (index * PRIVATE_KEY_SIZE);
   return privkey;
@@ -94,22 +83,22 @@ int write_private_key(uint8_t index, uint8_t * key) {
   return 0;
 }
 
-int create_key_pair(uint8_t index, uint8_t * address) {
-  uint8_t pubkey[PUBLIC_KEY_SIZE];
-  uint8_t privkey[PRIVATE_KEY_SIZE];
+int create_key_pair(uint8_t index, uint8_t * compressed_public_key) {
+  uint8_t public_key[PUBLIC_KEY_SIZE];
+  uint8_t private_key[PRIVATE_KEY_SIZE];
   const struct uECC_Curve_t * curve = uECC_secp256k1();
 
-  int code = uECC_make_key(pubkey, privkey, curve);
+  int code = uECC_make_key(public_key, private_key, curve);
   if (code != 1) {
     printf2(TAG_ERR, "Error, uECC_make_key failed. code = %d\n", code);
     return -1;
   }
 
-  if (write_private_key(index, privkey) != 0) {
+  if (write_private_key(index, private_key) != 0) {
     return -1;
   }
 
-  public_key_to_eth_address(pubkey, address);
+  uECC_compress(public_key, compressed_public_key, curve);
   return 0;
 }
 
@@ -124,33 +113,24 @@ int is_private_key_null(uint8_t *addr) {
   return 1;
 }
 
-void private_key_to_eth_addr(uint8_t *privkey, uint8_t *addr) {
-  uint8_t pubkey[PUBLIC_KEY_SIZE];
+void private_key_to_compressed_public_key (uint8_t *private_key, uint8_t *compressed_public_key) {
+  uint8_t public_key[PUBLIC_KEY_SIZE];
   const struct uECC_Curve_t * curve = uECC_secp256k1();
 
-  uECC_compute_public_key(privkey, pubkey, curve);
-  public_key_to_eth_address(pubkey, addr);
+  uECC_compute_public_key(private_key, public_key, curve);
+  uECC_compress(public_key, compressed_public_key, curve);
 }
 
-int key_to_eth_addr(uint8_t index, uint8_t *addr) {
-  uint8_t * privkey = get_private_key(index);
-
-  if (is_private_key_null(privkey)) {
+int get_compressed_public_key(uint8_t index, uint8_t *compressed_public_key) {
+  uint8_t * private_key = get_private_key(index);
+  if (is_private_key_null(private_key)) {
     return -1;
   }
-  private_key_to_eth_addr(privkey, addr);
+  private_key_to_compressed_public_key(private_key, compressed_public_key);
   return 0;
 }
 
-void cmd_hello(uint8_t * hid_msg) {
-  printf1(TAG_DUMP2, "%s\n", __func__);
-
-  printf1(TAG_DUMP2, "hello\n");
-}
-
 void cmd_reset(uint8_t * hid_msg) {
-  printf1(TAG_DUMP2, "%s\n", __func__);
-
   uint8_t buff[FLASH_PAGE_SIZE];
   uint8_t * page_ptr = (uint8_t *) flash_addr(STATE1_PAGE);
 
@@ -163,9 +143,9 @@ void cmd_reset(uint8_t * hid_msg) {
   );
 }
 
-int sign(uint8_t *privkey, uint8_t *buf, uint8_t length, uint8_t *sig) {
+int sign(uint8_t *private_key, uint8_t *buf, uint8_t length, uint8_t *sig) {
   const struct uECC_Curve_t * curve = uECC_secp256k1();
-  if (!uECC_sign(privkey, buf, length, sig, curve)) {
+  if (!uECC_sign(private_key, buf, length, sig, curve)) {
     return -1;
   }
   return 0;
@@ -187,19 +167,8 @@ void cmd_sign(uint8_t * hid_msg) {
     return;
   }
 
-  uint8_t addr[ETH_ADDR_SIZE];
-  private_key_to_eth_addr(private_key, addr);
-
-  printf1(TAG_DUMP2, "addr =\n");
-  dumpbytes(addr, ETH_ADDR_SIZE);
-  printf1(TAG_DUMP2, "\n");
-
   if (sign(private_key, mess, mess_len, signature) == 0) {
     uint8_t res[HID_PACKET_SIZE];
-
-    printf1(TAG_DUMP2, "signature: \n");
-    dumpbytes(signature, 64);
-    printf1(TAG_DUMP2, "\n");
 
     res[0] = RES_SIGN;
     memcpy(res + 1, signature, 32);
@@ -216,51 +185,43 @@ void cmd_delete_key(uint8_t * hid_msg) {
     return;
   }
 
-  uint8_t privkey[PRIVATE_KEY_SIZE];
-  memset(privkey, 0, PRIVATE_KEY_SIZE);
-  write_private_key(index, privkey);
+  uint8_t private_key[PRIVATE_KEY_SIZE];
+  memset(private_key, 0, PRIVATE_KEY_SIZE);
+  write_private_key(index, private_key);
 }
 
 void cmd_create_key(uint8_t * hid_msg) {
-  printf1(TAG_DUMP2, "%s\n", __func__);
-
   uint8_t index = hid_msg[1];
-  uint8_t eth_addr[ETH_ADDR_SIZE];
+  uint8_t compressed_public_key[COMPRESSED_PUBLIC_KEY_SIZE];
 
   if (check_index(index)) {
     return;
   }
 
-  create_key_pair(index, eth_addr);
-
-  printf1(TAG_DUMP2, "cmd_create_key: ");
-  dump_hex1(TAG_DUMP2, eth_addr, ETH_ADDR_SIZE);
-  printf1(TAG_DUMP2, "\n");
+  create_key_pair(index, compressed_public_key);
 
   uint8_t res[HID_PACKET_SIZE];
   memset(res, 0, HID_PACKET_SIZE);
-  memcpy(res + 1, eth_addr, ETH_ADDR_SIZE);
+  memcpy(res + 1, compressed_public_key, COMPRESSED_PUBLIC_KEY_SIZE);
   res[0] = RES_KEY_CREATED;
   usbhid_send(res);
 }
 
-void cmd_dump_keys(uint8_t * hid_msg) {
-  printf1(TAG_DUMP2, "%s\n", __func__);
-
+void cmd_get_keys(uint8_t * hid_msg) {
   uint8_t res[HID_PACKET_SIZE];
-  uint8_t key_slot_size = ETH_ADDR_SIZE + 1; // index + addr
+  uint8_t key_slot_size = COMPRESSED_PUBLIC_KEY_SIZE + 1; // index + addr
   uint8_t key_per_msg = (HID_PACKET_SIZE - 1) / (key_slot_size);
   int i;
   int j = 0;
-  uint8_t eth_addr[ETH_ADDR_SIZE];
+  uint8_t compressed_public_key[COMPRESSED_PUBLIC_KEY_SIZE];
 
   memset(res, 0xFF, HID_PACKET_SIZE);
   res[0] = RES_DUMP_KEYS;
 
   for (i = 0; i < KEY_PER_PAGE; ++i) {
-    if (key_to_eth_addr(i, eth_addr) == 0) {
+    if (get_compressed_public_key(i, compressed_public_key) == 0) {
       res[1 + (j * key_slot_size)] = i;
-      memcpy((res + 1) + (j * key_slot_size) + 1, eth_addr, ETH_ADDR_SIZE);
+      memcpy((res + 1) + (j * key_slot_size) + 1, compressed_public_key, COMPRESSED_PUBLIC_KEY_SIZE);
 
       j += 1;
 
@@ -282,10 +243,9 @@ struct {
   uint8_t op_code;
   void (*handler)(uint8_t *);
 } commands[] = {
-  { 0x0, &cmd_hello },
   { 0x1, &cmd_reset },
   { 0x2, &cmd_create_key },
-  { 0x3, &cmd_dump_keys },
+  { 0x3, &cmd_get_keys },
   { 0x4, &cmd_delete_key },
   { 0x5, &cmd_sign },
   { 0x0, NULL },

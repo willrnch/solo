@@ -1,7 +1,7 @@
 include build/common.mk
 
 # ST related
-SRC = src/main.c src/init.c src/redirect.c src/flash.c src/rng.c src/led.c src/device.c src/sha3.c
+SRC = src/main.c src/init.c src/redirect.c src/flash.c src/rng.c src/led.c src/device.c
 SRC += src/fifo.c src/attestation.c src/nfc.c src/ams.c src/sense.c
 SRC += src/startup_stm32l432xx.s src/system_stm32l4xx.c
 SRC += $(DRIVER_LIBS) $(USB_LIB)
@@ -15,7 +15,7 @@ SRC += ../../fido2/data_migration.c
 SRC += ../../fido2/extensions/extensions.c ../../fido2/extensions/solo.c
 SRC += ../../fido2/extensions/wallet.c
 
-# Crypto libs
+#Crypto libs
 SRC += ../../crypto/sha256/sha256.c ../../crypto/micro-ecc/uECC.c ../../crypto/tiny-AES-c/aes.c
 SRC += ../../crypto/cifra/src/sha512.c ../../crypto/cifra/src/blockwise.c
 
@@ -24,7 +24,8 @@ OBJ=$(OBJ1:.s=.o)
 
 INC = -Isrc/ -Isrc/cmsis/ -Ilib/ -Ilib/usbd/
 
-INC+= -I../../fido2/ -I../../fido2/extensions
+INC += -I../../crypto/micro-ecc
+INC += -I../../fido2/ -I../../fido2/extensions
 INC += -I../../tinycbor/src -I../../crypto/sha256 -I../../crypto/micro-ecc
 INC += -I../../crypto/tiny-AES-c
 INC += -I../../crypto/cifra/src -I../../crypto/cifra/src/ext
@@ -54,7 +55,7 @@ CFLAGS=$(INC) -c $(DEFINES)   -Wall -Wextra -Wno-unused-parameter -Wno-missing-f
 LDFLAGS_LIB=$(HW) $(SEARCH) -specs=nano.specs  -specs=nosys.specs  -Wl,--gc-sections -lnosys
 LDFLAGS=$(HW) $(LDFLAGS_LIB) -T$(LDSCRIPT) -Wl,-Map=$(TARGET).map,--cref -Wl,-Bstatic -ltinycbor
 
-ECC_CFLAGS = $(CFLAGS) -DuECC_PLATFORM=5 -DuECC_OPTIMIZATION_LEVEL=4 -DuECC_SQUARE_FUNC=1 -DuECC_SUPPORT_COMPRESSED_POINT=0
+ECC_CFLAGS = $(CFLAGS) -DuECC_PLATFORM=5 -DuECC_OPTIMIZATION_LEVEL=4 -DuECC_SQUARE_FUNC=1 -DuECC_SUPPORT_COMPRESSED_POINT=1 -D uECC_SUPPORTS_secp160r1=0 -D uECC_SUPPORTS_secp192r1=0 -D uECC_SUPPORTS_secp224r1=0 -D uECC_SUPPORTS_secp256r1=0
 
 
 .PRECIOUS: %.o
